@@ -13,7 +13,15 @@
 
 ## 一、快速部署(Docker,镜像来自 GHCR)
 
-镜像由本仓库的 GitHub Actions 自动构建并推送到 `ghcr.io/<owner>/rustdesk-config-server`。
+镜像由本仓库的 GitHub Actions 构建并推送到 `ghcr.io/<owner>/rustdesk-config-server`。
+**仅在推送 `v*` 版本 tag 时触发**(也可在 Actions 页手动 `workflow_dispatch`):
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+tag `v0.1.0` 会生成镜像标签 `0.1.0`、`0.1`、`latest`。
 
 `docker-compose.yml`:
 
