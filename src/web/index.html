@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RustDesk 配置中心</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 700px at 80% -10%, #172033 0%, #0b1120 55%, #060912 100%);
+    color: #e5e7eb;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 28px; border-bottom: 1px solid rgba(148,163,184,0.12);
+    position: sticky; top: 0; background: rgba(6,9,18,0.7); backdrop-filter: blur(10px); z-index: 10;
+  }
+  .brand { font-size: 19px; font-weight: 700; letter-spacing: .3px; }
+  .brand span { color: #3b82f6; }
+  .logout { font-size: 13px; color: #94a3b8; background: none; border: 1px solid rgba(148,163,184,0.25);
+    padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+  .logout:hover { color: #e5e7eb; border-color: #3b82f6; }
+  main { max-width: 860px; margin: 0 auto; padding: 28px 20px 60px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 22px; background: rgba(17,24,39,0.6);
+    padding: 6px; border-radius: 12px; border: 1px solid rgba(148,163,184,0.12); width: fit-content; }
+  .tab { padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 14px; color: #94a3b8;
+    border: 0; background: none; transition: all .15s; }
+  .tab.active { background: linear-gradient(135deg,#3b82f6,#2563eb); color: #fff; }
+  .panel { display: none; animation: fade .2s ease; }
+  .panel.active { display: block; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .card { background: rgba(17,24,39,0.8); border: 1px solid rgba(148,163,184,0.14);
+    border-radius: 14px; padding: 24px; margin-bottom: 18px; }
+  .card h2 { margin: 0 0 4px; font-size: 17px; }
+  .card .desc { color: #94a3b8; font-size: 13px; margin: 0 0 20px; }
+  label { display: block; font-size: 13px; color: #cbd5e1; margin: 14px 0 6px; }
+  label:first-of-type { margin-top: 0; }
+  input, select {
+    width: 100%; padding: 10px 12px; border-radius: 9px; font-size: 14px;
+    border: 1px solid rgba(148,163,184,0.22); background: #0b1220; color: #e5e7eb; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus, select:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.22); }
+  .hint { color: #64748b; font-size: 12px; margin-top: 5px; }
+  .btn { margin-top: 20px; padding: 10px 22px; border: 0; border-radius: 9px; font-size: 14px; font-weight: 600;
+    background: linear-gradient(135deg,#3b82f6,#2563eb); color: #fff; cursor: pointer; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 180px; }
+  .plat-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+  .plat-name { font-size: 15px; font-weight: 600; text-transform: capitalize; }
+  .badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; }
+  .badge.on { background: rgba(34,197,94,0.16); color: #4ade80; }
+  .badge.off { background: rgba(148,163,184,0.16); color: #94a3b8; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .switch input { display: none; }
+  .track { width: 40px; height: 22px; border-radius: 20px; background: #334155; position: relative; transition: background .15s; }
+  .track::after { content: ""; position: absolute; width: 18px; height: 18px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; }
+  .switch input:checked + .track { background: #22c55e; }
+  .switch input:checked + .track::after { left: 20px; }
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: #1e293b; border: 1px solid rgba(148,163,184,0.25); padding: 12px 22px; border-radius: 10px;
+    font-size: 14px; opacity: 0; transition: all .25s; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  .toast.ok { border-color: rgba(34,197,94,0.5); }
+  .toast.err { border-color: rgba(248,113,113,0.5); }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">Rust<span>Desk</span> 配置中心</div>
+    <button class="logout" id="logout">退出登录</button>
+  </header>
+  <main>
+    <div class="tabs">
+      <button class="tab active" data-tab="server">服务端设置</button>
+      <button class="tab" data-tab="update">更新设置</button>
+    </div>
+
+    <section class="panel active" id="panel-server">
+      <div class="card">
+        <h2>服务端设置</h2>
+        <p class="desc">客户端启动时会拉取以下配置并写入本地(host / key / api),修改后立即生效,无需重新编译。</p>
+        <label for="host">Host(ID/中继服务器)</label>
+        <input id="host" placeholder="例如 rs.example.com 或 1.2.3.4" />
+        <div class="hint">对应 rustdesk 的 custom-rendezvous-server。</div>
+        <label for="key">Key(公钥)</label>
+        <input id="key" placeholder="服务器 Ed25519 公钥,base64" />
+        <label for="api">API Server</label>
+        <input id="api" placeholder="例如 https://api.example.com" />
+        <div class="hint">对应 rustdesk 的 api-server(rustdesk-api 地址)。</div>
+        <button class="btn" id="save-server">保存服务端设置</button>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-update">
+      <div class="card">
+        <h2>更新设置</h2>
+        <p class="desc">
+          客户端请求 <code>/version/latest</code> 时,按其平台返回对应的版本号与下载链接。
+          下载链接支持占位符 <code>{version}</code>、<code>{arch}</code>(如 x86_64 / aarch64)。
+        </p>
+      </div>
+      <div id="updates"></div>
+    </section>
+  </main>
+  <div class="toast" id="toast"></div>
+
+<script>
+  const $ = (s) => document.querySelector(s);
+  const toastEl = $('#toast');
+  function toast(msg, kind) {
+    toastEl.textContent = msg;
+    toastEl.className = 'toast show ' + (kind || '');
+    setTimeout(() => { toastEl.className = 'toast ' + (kind || ''); }, 2200);
+  }
+  async function api(path, opts) {
+    const r = await fetch(path, opts);
+    if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+    return r;
+  }
+
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach((x) => x.classList.remove('active'));
+      t.classList.add('active');
+      $('#panel-' + t.dataset.tab).classList.add('active');
+    });
+  });
+
+  $('#logout').addEventListener('click', async () => {
+    await api('/admin/api/logout', { method: 'POST' });
+    location.href = '/login';
+  });
+
+  const PLAT_LABEL = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android', ios: 'iOS' };
+
+  function updateCard(u) {
+    const wrap = document.createElement('div');
+    wrap.className = 'card';
+    wrap.innerHTML = `
+      <div class="plat-head">
+        <span class="plat-name">${PLAT_LABEL[u.platform] || u.platform}</span>
+        <label class="switch">
+          <input type="checkbox" data-k="enabled" ${u.enabled ? 'checked' : ''} />
+          <span class="track"></span>
+        </label>
+      </div>
+      <label>版本号</label>
+      <input data-k="version" value="${escapeAttr(u.version)}" placeholder="例如 1.5.0" />
+      <label>下载链接</label>
+      <input data-k="download_url" value="${escapeAttr(u.download_url)}" placeholder="https://.../app-{version}-{arch}.exe" />
+      <div class="hint">支持占位符 {version} {arch}</div>
+      <button class="btn" data-save>保存 ${PLAT_LABEL[u.platform] || u.platform}</button>
+    `;
+    wrap.querySelector('[data-save]').addEventListener('click', async (e) => {
+      const btn = e.target;
+      btn.disabled = true;
+      const body = {
+        platform: u.platform,
+        enabled: wrap.querySelector('[data-k=enabled]').checked,
+        version: wrap.querySelector('[data-k=version]').value,
+        download_url: wrap.querySelector('[data-k=download_url]').value,
+      };
+      try {
+        const r = await api('/admin/api/update', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        toast(r.ok ? '已保存' : '保存失败', r.ok ? 'ok' : 'err');
+      } catch (_) {} finally { btn.disabled = false; }
+    });
+    return wrap;
+  }
+
+  function escapeAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
+
+  $('#save-server').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    const body = { host: $('#host').value, key: $('#key').value, api: $('#api').value };
+    try {
+      const r = await api('/admin/api/server', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      toast(r.ok ? '已保存' : '保存失败', r.ok ? 'ok' : 'err');
+    } catch (_) {} finally { e.target.disabled = false; }
+  });
+
+  async function load() {
+    try {
+      const r = await api('/admin/api/state');
+      const s = await r.json();
+      $('#host').value = s.server.host || '';
+      $('#key').value = s.server.key || '';
+      $('#api').value = s.server.api || '';
+      const box = $('#updates');
+      box.innerHTML = '';
+      const order = ['windows', 'macos', 'linux', 'android', 'ios'];
+      s.updates.sort((a, b) => order.indexOf(a.platform) - order.indexOf(b.platform));
+      s.updates.forEach((u) => box.appendChild(updateCard(u)));
+    } catch (_) {}
+  }
+  load();
+</script>
+</body>
+</html>

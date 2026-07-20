@@ -1,0 +1,17 @@
+services:
+  rustdesk-config-server:
+    image: ghcr.io/OWNER/rustdesk-config-server:latest
+    container_name: rustdesk-config-server
+    environment:
+      # 客户端接口的 Bearer token(patched 客户端内置同一值),必填
+      - CLIENT_TOKEN=change-me-to-a-long-random-token
+      # 管理面板登录密码,必填
+      - ADMIN_PASSWORD=change-me-admin-password
+      # 反代启用 HTTPS 时设为 1,让会话 cookie 带 Secure
+      - COOKIE_SECURE=0
+      - TZ=Asia/Shanghai
+    ports:
+      - "21120:21120"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>登录 · RustDesk 配置中心</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 600px at 50% -10%, #1e293b 0%, #0b1120 60%, #060912 100%);
+    color: #e5e7eb;
+  }
+  .card {
+    width: 360px; max-width: calc(100vw - 32px);
+    background: rgba(17, 24, 39, 0.85);
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 16px; padding: 32px 28px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+    backdrop-filter: blur(8px);
+  }
+  .logo { font-size: 26px; font-weight: 700; margin: 0 0 4px; letter-spacing: .3px; }
+  .logo span { color: #3b82f6; }
+  .sub { color: #94a3b8; font-size: 13px; margin: 0 0 24px; }
+  label { display: block; font-size: 13px; color: #cbd5e1; margin: 0 0 6px; }
+  input {
+    width: 100%; padding: 11px 13px; border-radius: 10px;
+    border: 1px solid rgba(148,163,184,0.22); background: #0b1220; color: #e5e7eb;
+    font-size: 14px; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.25); }
+  button {
+    width: 100%; margin-top: 20px; padding: 11px; border: 0; border-radius: 10px;
+    background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; font-size: 15px;
+    font-weight: 600; cursor: pointer; transition: filter .15s, transform .05s;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: translateY(1px); }
+  .err { color: #f87171; font-size: 13px; margin-top: 12px; min-height: 18px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1 class="logo">Rust<span>Desk</span> 配置中心</h1>
+    <p class="sub">请输入管理密码登录</p>
+    <form id="f">
+      <label for="pw">管理密码</label>
+      <input id="pw" type="password" autocomplete="current-password" placeholder="ADMIN_PASSWORD" autofocus />
+      <button type="submit">登 录</button>
+      <div class="err" id="err"></div>
+    </form>
+  </div>
+<script>
+  const f = document.getElementById('f');
+  const err = document.getElementById('err');
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.textContent = '';
+    const password = document.getElementById('pw').value;
+    try {
+      const r = await fetch('/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      if (r.ok) {
+        location.href = '/';
+      } else {
+        const j = await r.json().catch(() => ({}));
+        err.textContent = j.error || '登录失败';
+      }
+    } catch (e) {
+      err.textContent = '网络错误: ' + e;
+    }
+  });
+</script>
+</body>
+</html>
