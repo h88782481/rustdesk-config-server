@@ -2,7 +2,7 @@
 
 自建 RustDesk 的 **配置中心 + 自定义更新服务器**,配套 [rdgen](../rdgen) 的 `rdpatch.py` 补丁使用。
 
-- **远程下发 host / key / api**:patched 客户端启动时拉取 `GET /config`,写入本地配置,改面板即生效,**无需重新编译客户端**。
+- **远程下发 host / key / api**:patched 客户端启动时拉取 `GET /config`,写入内存隐藏层(设置页不显示),并加密缓存 last-good;改面板即生效,**无需重新编译客户端**。config-server 挂掉重启仍用上次成功的 host/key/api。
 - **自定义更新**:patched 客户端请求 `POST /version/latest`,按平台返回你在面板设置的版本号和**直连下载链接**。
 - **带 Token,不公开**:客户端接口需 `Authorization: Bearer <CLIENT_TOKEN>`;管理面板需密码登录。
 - 技术栈:Rust + Axum 0.8 + Tokio,数据存 JSON 文件(数据量极小,无需数据库),单二进制,Docker 部署。
@@ -100,12 +100,15 @@ docker compose up -d
 3. 打开 rdgen 生成页,在 **Remote Config Center** 一栏填:
    - **Config Server URL** = `https://cfg.example.com`
    - **Config Server Token** = 与 `CLIENT_TOKEN` 相同
-4. 选择平台/版本,生成。CI 会用 `rdpatch.py` 把上述地址和 token 编译进客户端。
+4. 选择平台/版本(1.4.0–1.4.9 或 nightly),生成。CI 会用 `rdpatch.py` 把上述地址和 token 编译进客户端。
 
 生成的客户端行为:
 
-- 启动时从 `/config` 拉取 host/key/api 并覆盖本地设置(拉取失败则用编译期默认值兜底,不影响启动)。
-- 定期 / 手动检查更新时请求 `/version/latest`,若有新版本则按返回的直连链接下载安装。
+- 启动时先 `GET /config`:拉到则直接用,并**加密**写入 `LocalConfig` `_rdc`(设置页不显示;机器 UUID + Config Token 绑定)。
+- 拉取失败才解密本地 last-good;从未成功拉过才退回编译期 Host/Key/API。
+- 定期 / 手动检查更新时请求 `/version/latest`,若有新版本:
+  - **Windows / macOS 已安装**:应用内按返回的直连链接下载并安装;
+  - **Linux / Android / 便携版 / Sciter**:打开同一条直连下载链接(不再跳转 rustdesk.com)。
 
 > 注意:启用 **Config Server** 时,不要再:
 > - 勾选 **removeNewVersionNotif**(它会删掉更新检查逻辑,与自定义更新冲突);
