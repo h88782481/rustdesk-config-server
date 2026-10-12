@@ -2,12 +2,12 @@
 
 自建 RustDesk 的 **配置中心 + 自定义更新服务器**,配套 [rdgen](../rdgen) 的 `rdpatch.py` 补丁使用。
 
-- **远程下发 host / key / api**:patched 客户端启动时拉取 `GET /config`,写入内存隐藏层(设置页不显示),并加密缓存 last-good;改面板即生效,**无需重新编译客户端**。config-server 挂掉重启仍用上次成功的 host/key/api。
+- **远程下发 host / key / api**:patched 客户端启动时拉取 `GET /config`,之后每 60 秒后台刷新,写入内存隐藏层(设置页不显示),并加密缓存 last-good。面板修改 API 后,客户端下次刷新成功后的登录、通讯录和心跳请求会使用新地址,**无需重启或重新编译客户端**。config-server 挂掉重启仍用上次成功的 host/key/api。
 - **自定义更新**:patched 客户端请求 `POST /version/latest`,按平台返回你在面板设置的版本号和**直连下载链接**。
 - **带 Token,不公开**:客户端接口需 `Authorization: Bearer <CLIENT_TOKEN>`;管理面板需密码登录。
 - 技术栈:Rust + Axum 0.8 + Tokio,数据存 JSON 文件(数据量极小,无需数据库),单二进制,Docker 部署。
 
-> 说明:更新检查 URL、下载逻辑、启动拉取配置这些能力是靠 `rdgen/.github/patches/rdpatch.py` 在**编译期**打进客户端的。官方原版客户端不会请求本服务。
+> 说明:更新检查 URL、下载逻辑、启动拉取和后台刷新配置这些能力是靠 `rdgen/.github/patches/rdpatch.py` 在**编译期**打进客户端的。官方原版客户端不会请求本服务;已有的仅启动拉取配置的客户端,需要用新版补丁重新生成并升级一次。
 
 ---
 
@@ -105,7 +105,9 @@ docker compose up -d
 生成的客户端行为:
 
 - 启动时先 `GET /config`:拉到则直接用,并**加密**写入 `LocalConfig` `_rdc`(设置页不显示;机器 UUID + Config Token 绑定)。
-- 拉取失败才解密本地 last-good;从未成功拉过才退回编译期 Host/Key/API。
+- 启动拉取失败才解密本地 last-good;从未成功拉过才退回编译期 Host/Key/API。
+- 随后每 60 秒在后台拉取一次(每个进程只启动一个刷新线程,单次请求超时 6 秒),不阻塞界面、不弹提示。刷新失败保留当前配置,下个周期重试;配置未变化时不重复写缓存或输出成功日志。
+- API 更新后供后续登录、通讯录和心跳请求使用;不强制中断已有会话或正在进行的请求。host/key 同步更新到隐藏层,已有 ID 服务器连接在重连时使用新值。空字段沿用当前值,不清空已有配置。
 - 定期 / 手动检查更新时请求 `/version/latest`,若有新版本:
   - **Windows / macOS 已安装**:应用内按返回的直连链接下载并安装;
   - **Linux / Android / 便携版 / Sciter**:打开同一条直连下载链接(不再跳转 rustdesk.com)。
