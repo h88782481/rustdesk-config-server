@@ -100,7 +100,7 @@ docker compose up -d
 3. 打开 rdgen 生成页,在 **Remote Config Center** 一栏填:
    - **Config Server URL** = `https://cfg.example.com`
    - **Config Server Token** = 与 `CLIENT_TOKEN` 相同
-4. 选择平台/版本(1.4.0–1.4.9 或 nightly),生成。CI 会用 `rdpatch.py` 把上述地址和 token 编译进客户端。
+4. 选择平台/版本(1.4.0–1.5.x 或 nightly),生成。CI 会用 `rdpatch.py` 把上述地址和 token 编译进客户端。
 
 生成的客户端行为:
 
@@ -108,9 +108,8 @@ docker compose up -d
 - 启动拉取失败才解密本地 last-good;从未成功拉过才退回编译期 Host/Key/API。
 - 随后每 60 秒在后台拉取一次(每个进程只启动一个刷新线程,单次请求超时 6 秒),不阻塞界面、不弹提示。刷新失败保留当前配置,下个周期重试;配置未变化时不重复写缓存或输出成功日志。
 - API 更新后供后续登录、通讯录和心跳请求使用;不强制中断已有会话或正在进行的请求。host/key 同步更新到隐藏层,已有 ID 服务器连接在重连时使用新值。空字段沿用当前值,不清空已有配置。
-- 定期 / 手动检查更新时请求 `/version/latest`,若有新版本:
-  - **Windows / macOS 已安装**:应用内按返回的直连链接下载并安装;
-  - **Linux / Android / 便携版 / Sciter**:打开同一条直连下载链接(不再跳转 rustdesk.com)。
+- 定期 / 手动检查更新时请求 `/version/latest`,若有新版本,所有平台(Windows / macOS / Linux / Android / Sciter)都提示更新,点击后用**浏览器**打开返回的下载链接,由用户手动安装。
+- 不做应用内下载安装和后台静默更新,「自动更新」开关已隐藏。
 
 > 注意:启用 **Config Server** 时,不要再:
 > - 勾选 **removeNewVersionNotif**(它会删掉更新检查逻辑,与自定义更新冲突);
