@@ -128,11 +128,11 @@ Windows / macOS 的下载直链取第一个填了的安装包(x86_64 优先),Lin
 - 启动拉取失败才解密本地 last-good;从未成功拉过才退回编译期 Host/Key/API。
 - 随后每 60 秒在后台拉取一次(每个进程只启动一个刷新线程,单次请求超时 6 秒),不阻塞界面、不弹提示。刷新失败保留当前配置,下个周期重试;配置未变化时不重复写缓存或输出成功日志。
 - API 更新后供后续登录、通讯录和心跳请求使用;不强制中断已有会话或正在进行的请求。host/key 同步更新到隐藏层,已有 ID 服务器连接在重连时使用新值。空字段沿用当前值,不清空已有配置。
-- 填了 Update Public Key 时,启动后及定期请求 `/api/version/latest`,有新版本:
-  - Windows 64 位 / macOS(已安装):首页提示更新,点「更新」在应用内下载,校验签名、大小和 sha256 后安装。
+- 填了 Update Public Key 时,客户端主界面每次启动请求一次 `/api/version/latest`(不定时检查),有新版本:
+  - Windows 64 位 / macOS(已安装):首页提示更新,点「更新」在应用内下载,校验签名、大小和 sha256 后安装(Windows 会弹一次 UAC 确认)。
   - Linux、Android、未安装的 Windows / macOS:提示有新版本,点「下载」用浏览器打开 `/download/<平台>`。
   - Windows 32 位(Sciter):提示有新版本,需开启「自动更新」。
-  - 后台静默更新:Windows 已安装且开启「自动更新」(默认关闭,可在 rdgen 的默认设置里加 `allow-auto-update=Y`)时自动下载安装;macOS 定制客户端没有后台静默更新。
+  - 后台静默更新:Windows 已安装且开启「自动更新」(默认关闭,可在 rdgen 的默认设置里加 `allow-auto-update=Y`)时由后台服务每天检查并自动安装;该开关在 Windows 设置页对用户可见,要锁定关闭可在 override 里加 `allow-auto-update=N`。macOS 定制客户端没有后台静默更新。
 
 > 注意:启用 **Config Server** 时,不要在 **手动 override/default** 里写 `custom-rendezvous-server` / `api-server` / `key`(会进 OVERWRITE_SETTINGS,优先级高于运行时下发)。host / key / api 交给面板下发即可;其它品牌化字段(appname、图标、公司名、urlLink 等)不受影响,可正常使用。
 
