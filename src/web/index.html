@@ -68,6 +68,14 @@
   .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
   .toast.ok { border-color: rgba(34,197,94,0.5); }
   .toast.err { border-color: rgba(248,113,113,0.5); }
+  .pkg { display: flex; gap: 8px; }
+  .pkg input { flex: 1; }
+  .pkg .switch { margin: 0; white-space: nowrap; }
+  .btn-sm { padding: 0 16px; border-radius: 9px; font-size: 13px; white-space: nowrap; cursor: pointer;
+    border: 1px solid rgba(59,130,246,0.5); background: none; color: #93c5fd; }
+  .btn-sm:hover { border-color: #3b82f6; color: #e5e7eb; }
+  .btn-sm:disabled { opacity: .55; cursor: default; }
+  .mono { font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -101,9 +109,19 @@
       <div class="card">
         <h2>更新设置</h2>
         <p class="desc">
-          客户端请求 <code>/version/latest</code> 时,按其平台返回对应的版本号与下载链接。
-          下载链接支持占位符 <code>{version}</code>、<code>{arch}</code>(如 x86_64 / aarch64)。
+          Windows / macOS 客户端在应用内下载并安装更新,安装包按签名清单校验大小和 sha256;
+          Linux / Android 客户端提示有新版本,点「下载」用浏览器打开下载直链。
         </p>
+        <label for="pubkey">更新公钥</label>
+        <input id="pubkey" readonly />
+        <div class="hint">生成客户端时填到 rdgen 的 Update Public Key。私钥在数据目录的 update_ed25519.key,丢失后已发出的客户端无法再更新,请备份。</div>
+        <div class="hint">rdgen 的 Config Server URL 须为 https://域名(443 端口、根路径),反向代理须透传 Host。</div>
+        <label for="pan123-key">123 云盘鉴权密钥</label>
+        <div class="pkg">
+          <input id="pan123-key" placeholder="123 云盘直链管理 → 鉴权管理里设置的密钥" />
+          <button class="btn-sm" id="save-pan123">保存</button>
+        </div>
+        <div class="hint">直链打开「123 鉴权」后,同步和下载跳转时用它生成 15 分钟内有效的鉴权直链;直链填 123 云盘复制的原始地址。</div>
       </div>
       <div id="updates"></div>
     </section>
@@ -138,68 +156,121 @@
     location.href = '/login';
   });
 
-  const PLAT_LABEL = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android', ios: 'iOS' };
+  async function post(path, body) {
+    const r = await api(path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      throw new Error(r.status === 504 ? '请求超时,同步仍在后台进行,稍后刷新页面查看' : (await r.text()) || '操作失败');
+    }
+  }
+
+  async function run(btn, fn) {
+    const text = btn.textContent;
+    btn.disabled = true;
+    try { await fn(); } catch (err) { toast(err.message, 'err'); } finally { btn.disabled = false; btn.textContent = text; }
+  }
+
+  const PLAT_LABEL = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android' };
+  const ARCH_LABEL = { x86_64: '64 位 / Intel(x86_64)', x86: '32 位(x86)', aarch64: 'Apple 芯片(aarch64)' };
+
+  function pan123Switch(attr, on) {
+    return `<label class="switch"><input type="checkbox" ${attr} ${on ? 'checked' : ''} /><span class="track"></span>123 鉴权</label>`;
+  }
+
+  function packageRows(u) {
+    return u.packages.map((p) => `
+      <label>${ARCH_LABEL[p.arch] || p.arch} 安装包直链</label>
+      <div class="pkg">
+        <input data-arch="${p.arch}" value="${escapeAttr(p.url)}" placeholder="https://..." />
+        ${pan123Switch(`data-pan123="${p.arch}"`, p.pan123_auth)}
+        <button class="btn-sm" data-sync="${p.arch}">同步</button>
+      </div>
+      <div class="hint mono">${p.sha256 ? `${(p.size / 1048576).toFixed(1)} MB · sha256 ${p.sha256}` : '未同步,不会推送此安装包'}</div>
+    `).join('');
+  }
 
   function updateCard(u) {
+    const name = PLAT_LABEL[u.platform] || u.platform;
     const wrap = document.createElement('div');
     wrap.className = 'card';
     wrap.innerHTML = `
       <div class="plat-head">
-        <span class="plat-name">${PLAT_LABEL[u.platform] || u.platform}</span>
+        <span class="plat-name">${name}</span>
         <label class="switch">
           <input type="checkbox" data-k="enabled" ${u.enabled ? 'checked' : ''} />
           <span class="track"></span>
         </label>
       </div>
       <label>版本号</label>
-      <input data-k="version" value="${escapeAttr(u.version)}" placeholder="例如 1.5.0" />
-      <label>下载链接</label>
-      <input data-k="download_url" value="${escapeAttr(u.download_url)}" placeholder="https://.../app-{version}-{arch}.exe" />
-      <div class="hint">支持占位符 {version} {arch}</div>
-      <button class="btn" data-save>保存 ${PLAT_LABEL[u.platform] || u.platform}</button>
+      <input data-k="version" value="${escapeAttr(u.version)}" placeholder="例如 1.5.3 或 1.5.3+1" />
+      <div class="hint">须与这次生成的客户端版本一致;+ 后的构建号用 1-9。</div>
+      ${u.packages.length ? packageRows(u) : `
+      <label>下载直链</label>
+      <div class="pkg">
+        <input data-k="download_url" value="${escapeAttr(u.download_url)}" placeholder="https://.../rustdesk-{version}.apk" />
+        ${pan123Switch('data-k="download_pan123_auth"', u.download_pan123_auth)}
+      </div>
+      <div class="hint">支持占位符 {version}</div>`}
+      <button class="btn" data-save>保存 ${name}</button>
     `;
-    wrap.querySelector('[data-save]').addEventListener('click', async (e) => {
-      const btn = e.target;
-      btn.disabled = true;
-      const body = {
-        platform: u.platform,
-        enabled: wrap.querySelector('[data-k=enabled]').checked,
-        version: wrap.querySelector('[data-k=version]').value,
-        download_url: wrap.querySelector('[data-k=download_url]').value,
-      };
-      try {
-        const r = await api('/admin/api/update', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        });
-        toast(r.ok ? '已保存' : '保存失败', r.ok ? 'ok' : 'err');
-      } catch (_) {} finally { btn.disabled = false; }
+    const save = () => post('/admin/api/update', {
+      platform: u.platform,
+      enabled: wrap.querySelector('[data-k=enabled]').checked,
+      version: wrap.querySelector('[data-k=version]').value,
+      download_url: wrap.querySelector('[data-k=download_url]')?.value || '',
+      download_pan123_auth: wrap.querySelector('[data-k=download_pan123_auth]')?.checked || false,
+      packages: [...wrap.querySelectorAll('[data-arch]')].map((el) => ({
+        arch: el.dataset.arch,
+        url: el.value,
+        pan123_auth: wrap.querySelector(`[data-pan123="${el.dataset.arch}"]`).checked,
+      })),
     });
+    const refresh = async () => {
+      const s = await (await api('/admin/api/state')).json();
+      wrap.replaceWith(updateCard(s.updates.find((x) => x.platform === u.platform)));
+    };
+    wrap.querySelector('[data-save]').addEventListener('click', (e) => run(e.target, async () => {
+      await save();
+      await refresh();
+      toast('已保存', 'ok');
+    }));
+    wrap.querySelectorAll('[data-sync]').forEach((btn) => btn.addEventListener('click', () => run(btn, async () => {
+      btn.textContent = '同步中…';
+      await save();
+      await post('/admin/api/sync', { platform: u.platform, arch: btn.dataset.sync });
+      await refresh();
+      toast('同步完成', 'ok');
+    })));
     return wrap;
   }
 
   function escapeAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
 
-  $('#save-server').addEventListener('click', async (e) => {
-    e.target.disabled = true;
-    const body = { host: $('#host').value, key: $('#key').value, api: $('#api').value };
-    try {
-      const r = await api('/admin/api/server', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      toast(r.ok ? '已保存' : '保存失败', r.ok ? 'ok' : 'err');
-    } catch (_) {} finally { e.target.disabled = false; }
-  });
+  $('#save-server').addEventListener('click', (e) => run(e.target, async () => {
+    await post('/admin/api/server', { host: $('#host').value, key: $('#key').value, api: $('#api').value });
+    toast('已保存', 'ok');
+  }));
+
+  $('#save-pan123').addEventListener('click', (e) => run(e.target, async () => {
+    await post('/admin/api/pan123', { auth_key: $('#pan123-key').value });
+    toast('已保存', 'ok');
+  }));
+
+  $('#pubkey').addEventListener('focus', (e) => e.target.select());
 
   async function load() {
     try {
       const r = await api('/admin/api/state');
       const s = await r.json();
+      $('#pubkey').value = s.update_public_key;
+      $('#pan123-key').value = s.pan123_auth_key || '';
       $('#host').value = s.server.host || '';
       $('#key').value = s.server.key || '';
       $('#api').value = s.server.api || '';
       const box = $('#updates');
       box.innerHTML = '';
-      const order = ['windows', 'macos', 'linux', 'android', 'ios'];
+      const order = ['windows', 'macos', 'linux', 'android'];
       s.updates.sort((a, b) => order.indexOf(a.platform) - order.indexOf(b.platform));
       s.updates.forEach((u) => box.appendChild(updateCard(u)));
     } catch (_) {}

@@ -2,6 +2,8 @@ mod auth;
 mod config;
 mod handlers;
 mod models;
+mod pan123;
+mod release;
 mod state;
 
 use axum::{
@@ -32,6 +34,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/", get(index_page))
         .route("/login", get(login_page))
         .route("/healthz", get(health))
+        // 浏览器打开的下载跳转,公开
+        .route("/download/{platform}", get(handlers::client::download))
+        .route(
+            "/rustdesk/rustdesk/releases/tag/{release_id}",
+            get(handlers::client::release_page),
+        )
         .merge(client_routes(state.clone()))
         .merge(admin_routes(state.clone()))
         .with_state(state);
@@ -63,7 +71,14 @@ async fn login_page() -> Html<&'static str> {
 fn client_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/config", get(handlers::client::get_config))
-        .route("/version/latest", post(handlers::client::version_latest))
+        .route(
+            "/api/version/latest",
+            post(handlers::client::version_latest),
+        )
+        .route(
+            "/rustdesk/rustdesk/releases/download/{release_id}/{file}",
+            get(handlers::client::release_file),
+        )
         .route_layer(middleware::from_fn_with_state(
             state,
             auth::require_client_token,
@@ -77,7 +92,9 @@ fn admin_routes(state: AppState) -> Router<AppState> {
         .route("/api/logout", post(handlers::admin::logout))
         .route("/api/state", get(handlers::admin::get_state))
         .route("/api/server", post(handlers::admin::set_server))
+        .route("/api/pan123", post(handlers::admin::set_pan123))
         .route("/api/update", post(handlers::admin::set_update))
+        .route("/api/sync", post(handlers::admin::sync_package))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_session,

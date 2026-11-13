@@ -13,5 +13,6 @@ services:
     ports:
       - "21120:21120"
     volumes:
+      # config.json 与更新签名私钥 update_ed25519.key,请备份
       - ./data:/data
     restart: unless-stopped

@@ -1,13 +1,13 @@
 # rustdesk-config-server
 
-自建 RustDesk 的 **配置中心 + 自定义更新服务器**,配套 [rdgen](../rdgen) 的 `rdpatch.py` 补丁使用。
+自建 RustDesk 的 **配置中心 + 自定义更新服务器**,配套 [rdgen](../rdgen) 生成的客户端使用(RustDesk 1.5.1 及以后)。
 
 - **远程下发 host / key / api**:patched 客户端启动时拉取 `GET /config`,之后每 60 秒后台刷新,写入内存隐藏层(设置页不显示),并加密缓存 last-good。面板修改 API 后,客户端下次刷新成功后的登录、通讯录和心跳请求会使用新地址,**无需重启或重新编译客户端**。config-server 挂掉重启仍用上次成功的 host/key/api。
-- **自定义更新**:patched 客户端请求 `POST /version/latest`,按平台返回你在面板设置的版本号和**直连下载链接**。
-- **带 Token,不公开**:客户端接口需 `Authorization: Bearer <CLIENT_TOKEN>`;管理面板需密码登录。
+- **应用内更新**:实现 RustDesk 1.5.1+ 的签名更新协议(与 rdgen 上游 `allow_custom_update.py` 配套)。面板填版本号和安装包直链,点「同步」由服务器流式下载算出大小和 sha256(不落盘);清单用本服务生成的 ed25519 私钥签名,客户端只信任编译进去的公钥。Windows / macOS 在应用内下载安装,Linux / Android 点「下载」用浏览器下载面板里的直链。
+- **带 Token**:客户端接口(配置、版本检查、清单、安装包)需 `Authorization: Bearer <CLIENT_TOKEN>`,管理面板需密码登录;只有浏览器打开的下载跳转是公开的。
 - 技术栈:Rust + Axum 0.8 + Tokio,数据存 JSON 文件(数据量极小,无需数据库),单二进制,Docker 部署。
 
-> 说明:更新检查 URL、下载逻辑、启动拉取和后台刷新配置这些能力是靠 `rdgen/.github/patches/rdpatch.py` 在**编译期**打进客户端的。官方原版客户端不会请求本服务;已有的仅启动拉取配置的客户端,需要用新版补丁重新生成并升级一次。
+> 说明:客户端侧能力在**编译期**打进去:上游 `allow_custom_update.py` 负责更新检查地址、信任公钥和放开定制客户端的更新检查,`rdgen/.github/patches/rdpatch.py` 负责远程配置、请求带 token 和更新入口。官方原版客户端不会请求本服务;用旧版补丁生成的客户端请求的是已移除的 `/version/latest`,需要用新版重新生成并手动安装一次。
 
 ---
 
@@ -38,7 +38,7 @@ services:
     ports:
       - "21120:21120"
     volumes:
-      - ./data:/data      # 配置持久化在 /data/config.json
+      - ./data:/data      # config.json 与更新签名私钥 update_ed25519.key,请备份
     restart: unless-stopped
 ```
 
@@ -50,7 +50,14 @@ docker compose up -d
 
 浏览器打开 `http://<服务器IP>:21120/`,用 `ADMIN_PASSWORD` 登录。
 
-生产环境建议放在反向代理后启用 HTTPS(客户端拉取配置/更新走 HTTPS 更安全),并把 `COOKIE_SECURE=1`。
+### 部署要求
+
+客户端只通过 HTTPS 访问本服务,对更新地址也有严格要求:
+
+- 放在反向代理后,用**有效证书的 HTTPS、默认 443 端口、域名根路径**对外提供,例如 `https://cfg.example.com`(小写,不带端口和路径)。客户端只接受不带端口的更新地址。
+- 反向代理须透传 `Host` 头(Caddy、Traefik 默认透传;nginx 需 `proxy_set_header Host $host;`)。清单里的安装包地址按 Host 生成,必须与客户端编译进去的地址一致。
+- 数据目录里的 `update_ed25519.key` 是更新签名私钥,首次启动自动生成。**务必备份**:丢失后已发出的客户端无法再验证新版本,只能重新生成客户端并手动安装。
+- 把 `COOKIE_SECURE=1`,让会话 cookie 只走 HTTPS。
 
 ---
 
@@ -61,7 +68,7 @@ docker compose up -d
 | `CLIENT_TOKEN` | ✅ | — | 客户端接口 Bearer token,必须与 rdgen 表单里的 **Config Server Token** 一致 |
 | `ADMIN_PASSWORD` | ✅ | — | 管理面板登录密码 |
 | `BIND_ADDR` | | `0.0.0.0:21120` | 监听地址 |
-| `DATA_DIR` | | `/data` | 配置文件目录(`config.json`) |
+| `DATA_DIR` | | `/data` | 数据目录(`config.json`、更新签名私钥 `update_ed25519.key`) |
 | `COOKIE_SECURE` | | `0` | 为 `1` 时会话 cookie 带 `Secure`(需 HTTPS) |
 
 ---
@@ -73,34 +80,47 @@ docker compose up -d
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/config` | 返回 `{ "host": "...", "key": "...", "api": "..." }` |
-| `POST` | `/version/latest` | 请求体为 rustdesk 的版本检查结构;返回 `{ "url": "<直连下载链接>", "version": "<版本号>" }` |
+| `POST` | `/api/version/latest` | 版本检查,返回 `{ "url": "https://<域名>/rustdesk/rustdesk/releases/tag/v<版本号>" }`;没有可用更新时 `url` 为空 |
+| `GET` | `/rustdesk/rustdesk/releases/download/v<版本号>/rustdesk-update.json` | 更新清单,收录该版本所有已同步的安装包 |
+| `GET` | `/rustdesk/rustdesk/releases/download/v<版本号>/rustdesk-update.json.sig` | 清单签名(ed25519,`key_id` 为 `custom-update`) |
+| `GET` | `/rustdesk/rustdesk/releases/download/v<版本号>/<文件名>` | 跳转到清单里对应的安装包直链 |
 
-`/version/latest` 逻辑:按客户端上报的 `os` 归类到 windows/macos/linux/android,匹配该平台的更新记录;
-若该平台 **已启用** 且版本号、下载链接均非空,则返回;否则返回空 `url`(客户端视为无更新)。
-下载链接支持占位符 `{version}`、`{arch}`(如 `x86_64` / `aarch64`),运行时替换。
+版本检查按客户端上报的 `os` 归到 windows / macos / linux / android,该平台开启且有版本号时:Windows / macOS 还需要上报架构(`arch`)的安装包已同步,Linux / Android 还需要填了下载直链。客户端从返回地址解析版本号,比自己新才提示更新。
+
+### 公开接口(浏览器打开,不带 token)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/download/<平台>` | 平台为 `windows` / `macos` / `linux` / `android`,跳转到该平台的下载直链(客户端的「下载」按钮) |
+| `GET` | `/rustdesk/rustdesk/releases/tag/v<版本号>` | 按浏览器 User-Agent 跳转到对应平台的下载直链(应用内更新失败时客户端提示打开的链接) |
+| `GET` | `/healthz` | 健康检查 |
+
+Windows / macOS 的下载直链取第一个填了的安装包(x86_64 优先),Linux / Android 用面板里的下载直链。
 
 ### 管理接口(需登录会话 cookie)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `POST` | `/admin/login` | body `{ "password": "..." }`,成功后下发会话 cookie |
-| `GET` | `/admin/api/state` | 读取当前全部配置 |
+| `GET` | `/admin/api/state` | 读取当前全部配置和更新公钥 |
 | `POST` | `/admin/api/server` | 保存 host/key/api |
-| `POST` | `/admin/api/update` | 保存某平台的更新记录 |
+| `POST` | `/admin/api/pan123` | body `{ "auth_key": "..." }`,保存 123 云盘直链鉴权密钥 |
+| `POST` | `/admin/api/update` | 保存某平台:开关、版本号、Linux / Android 下载直链、Windows / macOS 各架构安装包直链,以及每个直链的 123 鉴权开关;版本号或直链变了的安装包需重新同步 |
+| `POST` | `/admin/api/sync` | body `{ "platform": "windows", "arch": "x86_64" }`,下载该安装包直链并保存大小和 sha256 |
 | `POST` | `/admin/api/logout` | 退出登录 |
-
-`GET /healthz` 为健康检查,公开。
 
 ---
 
 ## 四、配合 rdgen 生成客户端
 
-1. 先部署好本服务,记下 `CLIENT_TOKEN` 和外部访问地址(如 `https://cfg.example.com`)。
-2. 在面板「服务端设置」里填好 host / key / api;在「更新设置」里给需要的平台填版本号 + 下载链接并开启。
+1. 先按上面的部署要求部署好本服务,记下 `CLIENT_TOKEN` 和外部访问地址(如 `https://cfg.example.com`)。
+2. 在面板「服务端设置」里填好 host / key / api;在「更新设置」顶部复制**更新公钥**。
 3. 打开 rdgen 生成页,在 **Remote Config Center** 一栏填:
    - **Config Server URL** = `https://cfg.example.com`
    - **Config Server Token** = 与 `CLIENT_TOKEN` 相同
-4. 选择平台/版本(1.4.0–1.5.x 或 nightly),生成。CI 会用 `rdpatch.py` 把上述地址和 token 编译进客户端。
+   - **Update Public Key** = 面板上的更新公钥(留空则只用远程配置,不启用应用内更新)
+   - **Custom App Version**(可选)= 用同一个 RustDesk 版本重新生成并推送更新时填,如 `1.5.3+1`
+4. 选择 RustDesk 1.5.1 及以后的版本(或 nightly),生成。
 
 生成的客户端行为:
 
@@ -108,19 +128,29 @@ docker compose up -d
 - 启动拉取失败才解密本地 last-good;从未成功拉过才退回编译期 Host/Key/API。
 - 随后每 60 秒在后台拉取一次(每个进程只启动一个刷新线程,单次请求超时 6 秒),不阻塞界面、不弹提示。刷新失败保留当前配置,下个周期重试;配置未变化时不重复写缓存或输出成功日志。
 - API 更新后供后续登录、通讯录和心跳请求使用;不强制中断已有会话或正在进行的请求。host/key 同步更新到隐藏层,已有 ID 服务器连接在重连时使用新值。空字段沿用当前值,不清空已有配置。
-- 定期 / 手动检查更新时请求 `/version/latest`,若有新版本,所有平台(Windows / macOS / Linux / Android / Sciter)都提示更新,点击后用**浏览器**打开返回的下载链接,由用户手动安装。
-- 不做应用内下载安装和后台静默更新,「自动更新」开关已隐藏。
+- 填了 Update Public Key 时,启动后及定期请求 `/api/version/latest`,有新版本:
+  - Windows 64 位 / macOS(已安装):首页提示更新,点「更新」在应用内下载,校验签名、大小和 sha256 后安装。
+  - Linux、Android、未安装的 Windows / macOS:提示有新版本,点「下载」用浏览器打开 `/download/<平台>`。
+  - Windows 32 位(Sciter):提示有新版本,需开启「自动更新」。
+  - 后台静默更新:Windows 已安装且开启「自动更新」(默认关闭,可在 rdgen 的默认设置里加 `allow-auto-update=Y`)时自动下载安装;macOS 定制客户端没有后台静默更新。
 
-> 注意:启用 **Config Server** 时,不要再:
-> - 勾选 **removeNewVersionNotif**(它会删掉更新检查逻辑,与自定义更新冲突);
-> - 填 **Custom URL for downloading new versions (downloadLink)**(它会把下载地址 sed 成静态值,与「服务器返回直连链接」冲突);
-> - 在 **手动 override/default** 里写 `custom-rendezvous-server` / `api-server` / `key`(会进 OVERWRITE_SETTINGS,优先级高于运行时下发)。
->
-> host / key / api 交给面板下发即可;其它品牌化字段(appname、图标、公司名、urlLink 等)不受影响,可正常使用。
+> 注意:启用 **Config Server** 时,不要在 **手动 override/default** 里写 `custom-rendezvous-server` / `api-server` / `key`(会进 OVERWRITE_SETTINGS,优先级高于运行时下发)。host / key / api 交给面板下发即可;其它品牌化字段(appname、图标、公司名、urlLink 等)不受影响,可正常使用。
 
 ---
 
-## 五、本地构建(可选)
+## 五、发布新版本
+
+1. 用 rdgen 生成各平台客户端,把安装包放到能直链下载的地方(直链需长期有效)。
+2. 面板「更新设置」里,每个平台:
+   - 打开开关,版本号填这次生成的客户端版本(rdgen 选的 RustDesk 版本,填了 Custom App Version 就用它)。**必须与客户端实际版本一致**,否则装完新版仍会提示更新。
+   - Windows / macOS:每个架构填安装包直链,点「同步」(会先保存)。只有同步过的安装包才会推送;改了版本号或直链要重新同步。Windows 填 `.exe`(不是 `.msi`),32 位对应 rdgen 的 Windows 32Bit;macOS 填 `.dmg`。
+   - Linux / Android:填下载直链(支持 `{version}`),保存。
+   - 直链在开了直链鉴权的 123 云盘上时:先在「更新设置」顶部填 123 云盘鉴权密钥并保存,再打开该直链的「123 鉴权」开关。直链填 123 云盘复制的原始地址(不带 `auth_key`),同步和每次下载跳转时由服务端现签,有效期 15 分钟,UID 取直链路径的第一段。
+3. 版本号比较:`1.5.3+1` 比 `1.5.3` 新。构建号会直接加到版本数值上,`1.5.3+12` 会被当成比 `1.5.4` 还新,所以构建号用 1–9。
+
+---
+
+## 六、本地构建(可选)
 
 无需本地环境即可用 CI/Docker 构建。如需本地:
 

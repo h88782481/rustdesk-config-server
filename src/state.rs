@@ -1,6 +1,10 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use ed25519_dalek::SigningKey;
 
 use crate::config::AppConfig;
 use crate::models::Store;
@@ -15,6 +19,8 @@ pub struct Inner {
     pub data: RwLock<Store>,
     pub sessions: RwLock<HashSet<String>>,
     pub data_path: PathBuf,
+    /// 更新清单签名私钥,客户端只信任编译进去的对应公钥。
+    pub signing_key: SigningKey,
 }
 
 impl AppState {
@@ -28,6 +34,7 @@ impl AppState {
             Err(_) => Store::default(),
         };
         store.ensure_platforms();
+        let signing_key = load_signing_key(&dir.join("update_ed25519.key"))?;
 
         let state = AppState {
             inner: Arc::new(Inner {
@@ -35,6 +42,7 @@ impl AppState {
                 data: RwLock::new(store),
                 sessions: RwLock::new(HashSet::new()),
                 data_path,
+                signing_key,
             }),
         };
         state
@@ -55,6 +63,11 @@ impl AppState {
         self.persist()
     }
 
+    /// 更新公钥(base64),填到 rdgen 的 update_public_key。
+    pub fn update_public_key(&self) -> String {
+        STANDARD.encode(self.inner.signing_key.verifying_key().as_bytes())
+    }
+
     /// 原子写:先写临时文件再 rename,避免写一半损坏。
     fn persist(&self) -> std::io::Result<()> {
         let json = {
@@ -67,4 +80,31 @@ impl AppState {
         std::fs::rename(&tmp, &self.inner.data_path)?;
         Ok(())
     }
+}
+
+/// 读取私钥(base64 的 32 字节种子);首次启动时生成,仅属主可读。
+fn load_signing_key(path: &Path) -> Result<SigningKey, String> {
+    let seed = match std::fs::read_to_string(path) {
+        Ok(text) => STANDARD
+            .decode(text.trim())
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .ok_or_else(|| format!("invalid update signing key {}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut seed = [0u8; 32];
+            getrandom::getrandom(&mut seed)
+                .map_err(|e| format!("failed to generate update signing key: {e}"))?;
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+            opts.open(path)
+                .and_then(|mut f| f.write_all(STANDARD.encode(seed).as_bytes()))
+                .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+            tracing::info!("generated update signing key {}", path.display());
+            seed
+        }
+        Err(e) => return Err(format!("failed to read {}: {e}", path.display())),
+    };
+    Ok(SigningKey::from_bytes(&seed))
 }
